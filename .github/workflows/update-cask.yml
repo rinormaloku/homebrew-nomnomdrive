@@ -1,0 +1,110 @@
+name: Update Cask
+
+on:
+  repository_dispatch:
+    types: [release-published]
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    name: Update cask version and checksums
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse version
+        id: version
+        run: |
+          TAG="${{ github.event.client_payload.version }}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Updating cask to version $VERSION (tag $TAG)"
+
+      - name: Download macOS DMGs and compute checksums
+        id: download
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          BASE="https://github.com/rinormaloku/nomnomdrive/releases/download/${TAG}"
+
+          echo "Downloading arm64 DMG..."
+          if curl -fsSL --retry 3 -o "arm64.dmg" "${BASE}/NomNomDrive-${VERSION}-arm64.dmg"; then
+            echo "arm64_sha=$(sha256sum arm64.dmg | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+            echo "arm64=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "arm64=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::ARM64 DMG not found"
+          fi
+
+          echo "Downloading Intel DMG..."
+          if curl -fsSL --retry 3 -o "intel.dmg" "${BASE}/NomNomDrive-${VERSION}.dmg"; then
+            echo "intel_sha=$(sha256sum intel.dmg | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+            echo "intel=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "intel=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Intel DMG not found"
+          fi
+
+      - name: Rewrite cask file
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARM64: ${{ steps.download.outputs.arm64 }}
+          ARM64_SHA: ${{ steps.download.outputs.arm64_sha }}
+          INTEL: ${{ steps.download.outputs.intel }}
+          INTEL_SHA: ${{ steps.download.outputs.intel_sha }}
+        run: |
+          if [[ "$ARM64" != "true" ]]; then
+            echo "::error::No arm64 DMG found — cannot update cask"
+            exit 1
+          fi
+
+          if [[ "$INTEL" == "true" ]]; then
+            SHA_LINE1="  sha256 arm:   \"${ARM64_SHA}\","
+            SHA_LINE2="         intel: \"${INTEL_SHA}\""
+          else
+            SHA_LINE1="  sha256 arm:   \"${ARM64_SHA}\","
+            SHA_LINE2="         intel: :no_check"
+          fi
+
+          cat > Casks/nomnomdrive.rb << EOF
+          cask "nomnomdrive" do
+            arch arm: "-arm64", intel: ""
+
+            version "${VERSION}"
+          ${SHA_LINE1}
+          ${SHA_LINE2}
+
+            url "https://github.com/rinormaloku/nomnomdrive/releases/download/v#{version}/NomNomDrive-#{version}#{arch}.dmg"
+            name "NomNomDrive"
+            desc "Local AI-powered document search and chat"
+            homepage "https://github.com/rinormaloku/nomnomdrive"
+
+            livecheck do
+              url :homepage
+              strategy :github_latest
+            end
+
+            app "NomNomDrive.app"
+
+            zap trash: [
+              "~/Library/Application Support/NomNomDrive",
+              "~/Library/Preferences/io.nomnomdrive.app.plist",
+            ]
+          end
+          EOF
+
+      - name: Commit and push
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/nomnomdrive.rb
+          git diff --cached --quiet && echo "Cask already up to date" && exit 0
+          git commit -m "Update NomNomDrive to ${VERSION}"
+          git push
