@@ -1,8 +1,9 @@
 cask "nomnomdrive" do
   arch arm: "-arm64", intel: ""
 
-  version "0.1.5"
-  sha256 :no_check
+  version "0.2.7"
+  sha256 arm:   "202ab9049fd1ab0a888eca5fd28f2fcac0ce17056443951bfe6a4ac79e843232",
+         intel: :no_check
 
   url "https://github.com/rinormaloku/nomnomdrive/releases/download/v#{version}/NomNomDrive-#{version}#{arch}.dmg"
   name "NomNomDrive"
